@@ -5,12 +5,16 @@
 #include <ArduinoJson.h>
 #include <LinkedList.h>
 
+#define LED_PIN 8
+#define LED_OFF 0
+#define LED_ON  1
+
 
 const int DEBUG_LEVEL = 3; 
 const int _LED_SIGNAL = 1;
 
 #define WAIT_ALIVE       15000
-#define WAIT_AFTER_SLEEP  3000
+#define WAIT_AFTER_SLEEP 2000
 
 uint32_t WaitForContact = WAIT_AFTER_SLEEP;
 
@@ -28,6 +32,8 @@ u_int8_t    broadcastAddressAll[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 const char *broadCastAddressAllC = "FFFFFFFFFFFF";
 
 uint32_t TSLed;
+uint32_t LastContact = 0;
+bool     SleepMode = true;
 
 struct RepeatMessagesStruct {
     char Msg[260];
@@ -45,7 +51,15 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
 void   SetMessageLED(int Color);
 void   LEDBlink(int Color, int n, uint8_t ms);
 #pragma endregion Functions
-
+void GoToSleep() 
+{
+    Serial.printf ("Going to sleep at: %lu....................................................................................\n\r", millis());
+    
+    LEDBlink(4,2,50);
+    
+    esp_sleep_enable_timer_wakeup(SLEEP_INTERVAL * 1000);
+    esp_deep_sleep_start();
+}
 void setup()
 {
     if (DEBUG_LEVEL > 0)
@@ -54,7 +68,7 @@ void setup()
             //delay(3000);
         #endif
     }
-   
+    pinMode(LED_PIN, OUTPUT);
     if (DEBUG_LEVEL > 0)
     {
         Serial.begin(115200);
@@ -66,10 +80,12 @@ void setup()
         case ESP_SLEEP_WAKEUP_TIMER:    
             WaitForContact = WAIT_AFTER_SLEEP; 
             LEDBlink(4, 1, 100);
+            Serial.println("Awake from sleep");
             break;
         default:                        
             WaitForContact = WAIT_ALIVE; 
             LEDBlink(3, 3, 100);
+            Serial.println("Neustart");
             break;
     }
 
@@ -246,6 +262,13 @@ void OnDataRecv(const esp_now_recv_info *info, const uint8_t* incomingData, int 
         MacCharToByte(_To, (char *) MacToS);
         uint32_t _TS = (int)doc[SEND_CMD_JSON_TS];
         int _TTL = (int) doc[SEND_CMD_JSON_TTL];
+        int _Order = (int) doc[SEND_CMD_JSON_ORDER];
+
+        if (_Order == SEND_CMD_STAY_ALIVE) 
+        {
+            LastContact = millis();
+            Serial.printf("Letzter Kontakt:%lu\n\r", LastContact);
+        }
 
         _TTL--;
         if (_TTL < 1) return;
@@ -273,6 +296,7 @@ void loop()
 {
     if (RepeatMessagesList.size() > 0)
     { 
+        LEDBlink(1,1,100);
         for (int i=RepeatMessagesList.size()-1; i>=0; i--)
         {
             RepeatMessagesStruct *RMItem = RepeatMessagesList.get(i);
@@ -280,5 +304,13 @@ void loop()
             RepeatMessagesList.remove(i);
             delete (RMItem);
         }
+    }
+
+    uint32_t actTime = millis();
+    
+    if ( (SleepMode) and (actTime+100 - LastContact > WaitForContact) )       
+    {
+        Serial.printf("actTime:%lu, LastContact:%lu - (actTime - LastContact) = %lu, WaitForContact = %lu, - Try to sleep.....\n\r", actTime, LastContact, actTime - LastContact, WaitForContact);
+        GoToSleep();
     }
 }
